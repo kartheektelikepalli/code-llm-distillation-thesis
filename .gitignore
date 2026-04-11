@@ -216,3 +216,5 @@ checkpoints/
 
 # Mac
 .DS_Store
+# External tools
+llama.cpp/
