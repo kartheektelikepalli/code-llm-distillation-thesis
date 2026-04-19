@@ -1,5 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore")
+import json
+import os
 """
 Load and explore MBPP dataset from HuggingFace.
 Combines train, validation, and test splits.
@@ -21,6 +23,14 @@ def main():
         dataset["test"]
     ])
 
+    os.makedirs("data/raw", exist_ok=True)
+
+    with open("data/raw/mbpp.jsonl", "w") as f:
+        for item in full_dataset:
+            f.write(json.dumps(item) + "\n")
+
+    print("Saved to data/raw/mbpp.jsonl")
+
     # Print summary
     print("=" * 60)
     print("MBPP Dataset Information")
@@ -38,7 +48,6 @@ def main():
     print(f"test_list: {first_sample['test_list']}")
     print(f"code: {first_sample['code']}")
     print("=" * 60)
-
 
 if __name__ == "__main__":
     main()
