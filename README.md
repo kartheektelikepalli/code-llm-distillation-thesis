@@ -1,2 +1,2 @@
 # code-llm-distillation-thesis
-This repository contains my work on code LLM distillation experiments using AI Agents
+This project is part of my M.Tech dissertation at BITS Pilani focusing on LLM optimization techniques.
