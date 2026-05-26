@@ -1,0 +1,15 @@
+Items being tracked using mlflow:
+
+model_name
+quantization
+dataset_split
+temperature
+max_tokens
+generation_latency
+tokens_per_sec
+accepted_samples
+rejected_samples
+syntax_failures
+runtime_failures
+timeout_failures
+acceptance_ratio
