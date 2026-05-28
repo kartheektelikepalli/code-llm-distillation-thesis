@@ -228,3 +228,13 @@ lora/checkpoints/
 
 # MLX converted models
 lora/artifacts/deepseek-coder-1.3b-instruct-mlx/
+# Optimization artifacts
+optimization/artifacts/
+
+# Student outputs
+data/student_baseline_outputs/
+data/student_execution_outputs/
+
+# LoRA generated artifacts
+lora/artifacts/
+lora/checkpoints/
