@@ -1,0 +1,2 @@
+{"messages": [{"role": "user", "content": "Write a python function to remove even numbers from a given list."}, {"role": "assistant", "content": "def remove_even(my_list):\n    return [x for x in my_list if x % 2 != 0]"}]}
+{"messages": [{"role": "user", "content": "Write a function to calculate the sum of series 1\u00b2+2\u00b2+3\u00b2+\u2026.+n\u00b2."}, {"role": "assistant", "content": "def series_sum(n):\n    return sum(x**2 for x in range(1, n+1))"}]}

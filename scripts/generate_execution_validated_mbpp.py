@@ -1,332 +1,153 @@
-import sys
-from pathlib import Path
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(ROOT_DIR))
-
-import warnings
-
-warnings.filterwarnings(
-    "ignore",
-    message="urllib3 v2 only supports OpenSSL",
-)
-
-import json
+import os
+import ast
 import traceback
-import time
-
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-
 from datasets import load_dataset
+from tqdm import tqdm
+import argparse
 
-from configs.experiment_config import get_args
-
-from utils.mlflow_logger import (
-    start_run,
-    log_params,
-    log_metrics,
-    log_artifact,
-    set_tags,
-    end_run,
-)
-
-# =========================================================
-# CONFIG
-# =========================================================
-
-args = get_args()
-
-MODEL_NAME = args.model_name
-
-DATASET_NAME = args.dataset_name
-DATASET_SPLIT = args.dataset_split
-
-EXPERIMENT_NAME = args.experiment_name
+parser = argparse.ArgumentParser()
+parser.add_argument("--input_parquet", required=True)
+args = parser.parse_args()
 
 INPUT_PARQUET = args.input_parquet
 
-OUTPUT_DIR = Path(
-    "data/execution_validated_outputs"
+OUTPUT_DIR = "data/execution_validated_outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_PARQUET = os.path.join(
+    OUTPUT_DIR,
+    "execution_validated_full.parquet"
 )
 
-OUTPUT_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
-
-TIMESTAMP = time.strftime("%Y%m%d_%H%M%S")
-
-OUTPUT_PATH = (
-    OUTPUT_DIR
-    / f"execution_validated_mbpp_{TIMESTAMP}.parquet"
-)
-
-NUM_SAMPLES = args.num_samples
-
-# =========================================================
-# LOAD DATA
-# =========================================================
+# ---------------------------------------------------------
+# Load generated outputs
+# ---------------------------------------------------------
 
 df = pd.read_parquet(INPUT_PARQUET)
 
-if NUM_SAMPLES > 0:
-    df = df.head(NUM_SAMPLES)
+# ---------------------------------------------------------
+# Load MBPP tests
+# ---------------------------------------------------------
 
-dataset = load_dataset(DATASET_NAME)
+mbpp = load_dataset("mbpp")["train"]
 
-mbpp_split = dataset[DATASET_SPLIT]
+test_lookup = {}
 
-task_lookup = {
-    item["task_id"]: item
-    for item in mbpp_split
-}
+for item in mbpp:
+    test_lookup[item["task_id"]] = item["test_list"]
 
-# =========================================================
-# METRICS
-# =========================================================
+# ---------------------------------------------------------
+# Execution helper
+# ---------------------------------------------------------
 
-metrics = {
-    "processed_samples": 0,
-    "execution_passed": 0,
-    "execution_failed": 0,
-    "assertion_failures": 0,
-    "runtime_failures": 0,
-}
+def run_code_and_tests(code, tests):
 
-# =========================================================
-# HELPER STRUCTURES
-# =========================================================
-
-
-class Pair:
-    def __init__(self, a, b):
-        self.a = a
-        self.b = b
-
-    def __getitem__(self, idx):
-        return [self.a, self.b][idx]
-
-    def __repr__(self):
-        return f"Pair({self.a}, {self.b})"
-
-
-# =========================================================
-# EXECUTION VALIDATION
-# =========================================================
-
-
-def validate_execution(code, tests):
-
-    execution_namespace = {
-        "Pair": Pair,
-    }
+    namespace = {}
 
     try:
-
-        exec(code, execution_namespace)
+        exec(code, namespace)
 
         for test in tests:
+            exec(test, namespace)
 
-            exec(test, execution_namespace)
+        return True, None, None
 
-        return True, None
+    except Exception as e:
 
-    except AssertionError as e:
+        tb = traceback.format_exc()
 
-        return False, f"AssertionError: {str(e)}"
+        return (
+            False,
+            type(e).__name__,
+            tb
+        )
 
-    except Exception:
+# ---------------------------------------------------------
+# Main execution loop
+# ---------------------------------------------------------
 
-        return False, traceback.format_exc()
+results = []
 
+passed_count = 0
+failed_count = 0
 
-# =========================================================
-# MAIN
-# =========================================================
+for _, row in tqdm(df.iterrows(), total=len(df)):
 
+    task_id = row["task_id"]
+    generated_code = row["generated_code"]
 
-def main():
+    tests = test_lookup.get(task_id, [])
 
-    run_name = (
-        f"execution_validation_"
-        f"{MODEL_NAME}_"
-        f"{DATASET_NAME}_"
-        f"{DATASET_SPLIT}"
+    passed, error_type, error_traceback = run_code_and_tests(
+        generated_code,
+        tests
     )
 
-    start_run(
-        run_name=run_name,
-        experiment_name=EXPERIMENT_NAME,
-    )
+    if passed:
+        passed_count += 1
+    else:
+        failed_count += 1
 
-    set_tags(
+    results.append(
         {
-            "stage": "execution_validation",
-            "dataset": DATASET_NAME,
-            "split": DATASET_SPLIT,
-            "pipeline": "error_aware_refinement",
+            **row.to_dict(),
+
+            "execution_passed": passed,
+
+            "error_type": error_type,
+
+            "error_traceback": error_traceback,
         }
     )
 
-    log_params(
-        {
-            "model_name": MODEL_NAME,
-            "dataset_name": DATASET_NAME,
-            "dataset_split": DATASET_SPLIT,
-            "input_parquet": INPUT_PARQUET,
-            "num_samples": NUM_SAMPLES,
-        }
+# ---------------------------------------------------------
+# Save full dataset
+# ---------------------------------------------------------
+
+results_df = pd.DataFrame(results)
+
+results_df.to_parquet(OUTPUT_PARQUET)
+results_df.to_parquet(OUTPUT_PARQUET)
+
+passed_df = results_df[
+    results_df["execution_passed"] == True
+]
+
+failed_df = results_df[
+    results_df["execution_passed"] == False
+]
+
+passed_df.to_parquet(
+    os.path.join(
+        OUTPUT_DIR,
+        "execution_passed.parquet"
     )
+)
 
-    validated_rows = []
-
-    total_samples = len(df)
-
-    print("=" * 70)
-    print("EXECUTION VALIDATION")
-    print("=" * 70)
-    print(f"Total samples: {total_samples}")
-    print("-" * 70)
-
-    for idx, row in df.iterrows():
-
-        task_id = row["task_id"]
-
-        generated_code = row["generated_code"]
-
-        mbpp_item = task_lookup.get(task_id)
-
-        if mbpp_item is None:
-
-            print(
-                f"{idx+1}/{total_samples} "
-                f"--- TASK NOT FOUND --- "
-                f"{task_id}"
-            )
-
-            continue
-
-        tests = mbpp_item["test_list"]
-
-        metrics["processed_samples"] += 1
-
-        passed, error_message = validate_execution(
-            generated_code,
-            tests,
-        )
-
-        if passed:
-
-            metrics["execution_passed"] += 1
-
-            validated_rows.append(
-                {
-                    **row.to_dict(),
-                    "execution_passed": True,
-                    "execution_error": None,
-                }
-            )
-
-            print(
-                f"{idx+1}/{total_samples} "
-                f"--- EXECUTION PASSED --- "
-                f"{task_id}"
-            )
-
-        else:
-
-            metrics["execution_failed"] += 1
-
-            if (
-                error_message
-                and "AssertionError"
-                in error_message
-            ):
-
-                metrics["assertion_failures"] += 1
-
-            else:
-
-                metrics["runtime_failures"] += 1
-
-            print(
-                f"{idx+1}/{total_samples} "
-                f"--- EXECUTION FAILED --- "
-                f"{task_id}"
-            )
-
-        if (idx + 1) % 10 == 0:
-
-            current_metrics = {
-                **metrics,
-                "execution_pass_rate": (
-                    metrics["execution_passed"]
-                    / max(
-                        metrics["processed_samples"],
-                        1,
-                    )
-                ),
-            }
-
-            log_metrics(
-                current_metrics,
-                step=idx + 1,
-            )
-
-    # =====================================================
-    # SAVE FINAL DATASET
-    # =====================================================
-
-    validated_df = pd.DataFrame(validated_rows)
-
-    table = pa.Table.from_pandas(validated_df)
-
-    pq.write_table(
-        table,
-        OUTPUT_PATH,
+failed_df.to_parquet(
+    os.path.join(
+        OUTPUT_DIR,
+        "execution_failed.parquet"
     )
+)
 
-    # =====================================================
-    # FINAL METRICS
-    # =====================================================
+# ---------------------------------------------------------
+# Summary
+# ---------------------------------------------------------
 
-    final_metrics = {
-        **metrics,
-        "execution_pass_rate": (
-            metrics["execution_passed"]
-            / max(
-                metrics["processed_samples"],
-                1,
-            )
-        ),
-    }
+total = len(results_df)
 
-    log_metrics(final_metrics)
+print("\n===== EXECUTION SUMMARY =====")
 
-    log_artifact(str(OUTPUT_PATH))
+print(f"Total Samples     : {total}")
+print(f"Execution Passed  : {passed_count}")
+print(f"Execution Failed  : {failed_count}")
 
-    end_run()
-
-    print("-" * 70)
-
+if total > 0:
     print(
-        f"Execution Pass Rate: "
-        f"{final_metrics['execution_pass_rate']:.4f}"
+        f"Pass Rate         : {100 * passed_count / total:.2f}%"
     )
 
-    print("=" * 70)
-
-    print("\nFinal Metrics:\n")
-
-    print(
-        json.dumps(
-            final_metrics,
-            indent=2,
-        )
-    )
-
-
-if __name__ == "__main__":
-    main()
+print(f"\nSaved to:")
+print(OUTPUT_PARQUET)
